@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .schemas import (
     IngestPayload, IngestSummary, RowResult, RawCampaign,
 )
+from .config import settings
 from .cleaning import clean_row
 from .llm import llm_client, fallback_channel
 from .db import EnrichedCampaign, IngestRun, IngestRowResult
@@ -97,25 +98,35 @@ def _process_row(
         seen_ids.add(cid)
 
         # Enrich (never raises: degrades to fallback).
-        result, source = llm_client.enrich(outcome, currency)
+        # Deterministic-first: known channels resolved by the static table
+        # (channel_source='static'); unknown ones classified by the LLM.
+        result, source, channel_source = llm_client.enrich(outcome, currency)
 
-        # Self-check / eval: cross-check the LLM's channel against the
-        # deterministic rule. Disagreement is informational (flag, don't block).
         flags = list(outcome.flags)
-        det_channel = fallback_channel(outcome.raw_channel, outcome.name)
-        if source == "llm" and result.normalized_channel != det_channel:
-            flags.append(
-                f"channel_selfcheck_mismatch(llm={result.normalized_channel.value},"
-                f"rule={det_channel.value})"
-            )
+        if channel_source == "static":
+            flags.append("channel_resolved_static")
 
-        # Embed for semantic search (best-effort; null vector => SQL fallback).
-        embedding = rag.compute_embedding(
-            outcome.name, outcome.description,
-            result.normalized_channel.value, result.inferred_objective.value,
-        )
-        if embedding is None:
-            flags.append("embedding_unavailable")
+        # Self-check / eval: only meaningful when the LLM classified the channel
+        # itself. Cross-check against the deterministic rule; flag disagreement.
+        if channel_source == "llm":
+            det_channel = fallback_channel(outcome.raw_channel, outcome.name)
+            if result.normalized_channel != det_channel:
+                flags.append(
+                    f"channel_selfcheck_mismatch(llm={result.normalized_channel.value},"
+                    f"rule={det_channel.value})"
+                )
+
+        # Embed for semantic search only when RAG is enabled. Off by default:
+        # retrieval isn't needed for enrichment, so no embedding is computed and
+        # no noisy flag is added.
+        embedding = None
+        if settings.rag_enabled:
+            embedding = rag.compute_embedding(
+                outcome.name, outcome.description,
+                result.normalized_channel.value, result.inferred_objective.value,
+            )
+            if embedding is None:
+                flags.append("embedding_unavailable")
 
         # Idempotent upsert by business id.
         existing = session.get(EnrichedCampaign, cid)

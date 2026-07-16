@@ -75,6 +75,16 @@ class EnrichmentResult(BaseModel):
     health_rationale: str = Field(min_length=1, max_length=280)
 
 
+class PartialEnrichment(BaseModel):
+    """Used when the channel was resolved deterministically by the static
+    lookup table, so the LLM only needs to produce objective + score."""
+    model_config = ConfigDict(extra="forbid")
+
+    inferred_objective: Objective
+    health_score: int = Field(ge=0, le=100)
+    health_rationale: str = Field(min_length=1, max_length=280)
+
+
 # --- Layer 3: persisted / served models ---
 
 class CleanedMetrics(BaseModel):

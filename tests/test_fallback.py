@@ -1,8 +1,27 @@
 """Tests for the rule-based fallback enrichment (used when the LLM misbehaves)."""
 from app.cleaning import clean_row
 from app.schemas import RawCampaign, Channel, Objective, CleanedMetrics
-from app.llm import fallback_channel, fallback_objective, fallback_enrich
+from app.llm import (
+    fallback_channel, fallback_objective, fallback_enrich, resolve_channel_static,
+)
 from app.cleaning import CleanOutcome
+
+
+def test_static_channel_resolution_known_variants():
+    assert resolve_channel_static("fb", "x") == Channel.META
+    assert resolve_channel_static("IG", "x") == Channel.META
+    assert resolve_channel_static("GAds", "x") == Channel.GOOGLE_SEARCH
+    assert resolve_channel_static("adwords", "x") == Channel.GOOGLE_SEARCH
+    assert resolve_channel_static("yt", "x") == Channel.YOUTUBE
+    assert resolve_channel_static("Klaviyo email", "x") == Channel.EMAIL
+    # PMax detected from name even when channel says Google Ads
+    assert resolve_channel_static("Google Ads", "Performance Max — full catalog") == Channel.GOOGLE_PMAX
+
+
+def test_static_channel_resolution_miss_returns_none():
+    # Unknown/unseen variant should fall through to the LLM.
+    assert resolve_channel_static("???", "real name") is None
+    assert resolve_channel_static("carrier pigeon", "x") is None
 
 
 def test_channel_mapping_variants():
