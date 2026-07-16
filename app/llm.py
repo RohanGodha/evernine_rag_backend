@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 from groq import Groq
@@ -128,9 +129,12 @@ class LLMClient:
 
 # --- Deterministic fallback (also reused by the eval/self-check) ---
 
+# Keys are matched on WORD BOUNDARIES so short tokens (ig, fb, yt, sms) don't
+# match inside unrelated words (e.g. "ig" in "pigeon"). Order matters: PMax is
+# checked before generic Google, Meta before Google, etc.
 _CHANNEL_RULES = [
-    (("fb", "meta", "facebook", "ig", "instagram"), Channel.META),
     (("pmax", "performance max"), Channel.GOOGLE_PMAX),
+    (("fb", "meta", "facebook", "ig", "instagram"), Channel.META),
     (("google", "adwords", "search"), Channel.GOOGLE_SEARCH),
     (("youtube", "yt"), Channel.YOUTUBE),
     (("email", "klaviyo"), Channel.EMAIL),
@@ -139,12 +143,15 @@ _CHANNEL_RULES = [
 ]
 
 
+def _has_token(hay: str, token: str) -> bool:
+    """Word-boundary match; handles multi-word tokens like 'performance max'."""
+    return re.search(rf"\b{re.escape(token)}\b", hay) is not None
+
+
 def fallback_channel(raw_channel: Optional[str], name: Optional[str]) -> Channel:
     hay = f"{raw_channel or ''} {name or ''}".lower()
-    if "pmax" in hay or "performance max" in hay:
-        return Channel.GOOGLE_PMAX
     for keys, ch in _CHANNEL_RULES:
-        if any(k in hay for k in keys):
+        if any(_has_token(hay, k) for k in keys):
             return ch
     return Channel.OTHER
 
