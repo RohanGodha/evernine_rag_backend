@@ -30,13 +30,16 @@ logger = logging.getLogger(__name__)
 EMBEDDING_DIM = 384
 
 # pgvector's SQLAlchemy type is optional at runtime; guard the import so the app
-# still boots (in SQL-only fallback mode) if the package isn't installed.
+# still boots (in SQL-only mode) if the package isn't installed. The embedding
+# column is only created when RAG is explicitly enabled AND pgvector is present.
 try:
     from pgvector.sqlalchemy import Vector
-    PGVECTOR_AVAILABLE = True
+    _PGVECTOR_IMPORTED = True
 except Exception:  # pragma: no cover - import environment dependent
     Vector = None  # type: ignore
-    PGVECTOR_AVAILABLE = False
+    _PGVECTOR_IMPORTED = False
+
+PGVECTOR_AVAILABLE = _PGVECTOR_IMPORTED and settings.rag_enabled
 
 
 engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)

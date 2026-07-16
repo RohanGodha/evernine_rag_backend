@@ -11,13 +11,15 @@
         │         │ ok                                        │
         │    dedupe (keep first) ─► seen? → duplicate         │
         │         │                                           │
-        │    llm.enrich  ──(retry)──► fallback_enrich         │  ← structured output
+        │    channel: static lookup? ── hit → LLM(objective+score)  │
+        │                            └ miss → LLM(channel+obj+score)│  ← structured output
+        │         │  (LLM fails → rule-based fallback_enrich)        │
         │         │                                           │
-        │    self-check (channel vs deterministic) → flag     │
+        │    self-check (LLM channel vs deterministic) → flag │
         │         │                                           │
-        │    embeddings.encode ──(guard)──► skip+flag         │  ← local MiniLM
+        │    [RAG off by default: no embedding computed]      │
         │         │                                           │
-        │    db upsert (enriched_campaigns + vector)          │
+        │    db upsert (enriched_campaigns)                   │
         │         │                                           │
         │    record RowResult → ingest_row_results            │
         └─────────────────────────┬─────────────────────────┘
@@ -26,8 +28,8 @@
 
   GET /campaigns            → SQL filters (channel / min_score / objective)
   GET /campaigns/{id}       → by PK, 404 if missing
-  GET /campaigns/search?q=  → embed q → pgvector cosine  (fallback: SQL ILIKE)
-  GET /campaigns/insights   → RAG: top-k + aggregates → LLM (fallback: SQL only)
+  GET /campaigns/search?q=  → SQL ILIKE keyword  (pgvector cosine if RAG on)
+  GET /campaigns/insights   → SQL aggregates → structured LLM (deterministic fallback)
 ```
 
 ## 2. Module map
@@ -57,25 +59,26 @@ structured call over retrieved context suffices.
 Deterministic pre-cleaning does the mechanical work; the LLM only makes the
 **judgment calls** (channel mapping, objective inference, health score).
 
-## 4. RAG approach — comparison & decision
+## 4. RAG approach — comparison & decision (RAG DELIBERATELY OFF)
 
 | Approach | Fit (14 rows) | Deps | Verdict |
 |----------|---------------|------|---------|
-| SQL-aggregate only | High | none | **fallback path** |
-| **pgvector + local embeddings (MiniLM)** | Medium (demonstrative) | torch, sentence-transformers, pgvector | **CHOSEN** |
-| External embeddings API (OpenAI/Cohere) | Medium | extra API key | rejected — only a scoped Groq key is guaranteed |
+| **SQL-aggregate insights + SQL keyword search** | High | none | **CHOSEN (default)** |
+| pgvector + local embeddings (MiniLM) | Low — no retrieval need | torch, sentence-transformers, pgvector | kept behind `RAG_ENABLED` flag, off |
+| External embeddings API (OpenAI/Cohere) | Low | extra API key | rejected — only a scoped Groq key is guaranteed |
 | Groq embeddings | — | — | impossible — Groq has no embedding model |
 
-**Rationale:** the repo is a RAG backend and the exercise rewards demonstrating
-retrieval-augmented generation. Local embeddings keep it **self-contained** (no
-extra key), and a **graceful SQL fallback** keeps it robust for the live demo.
-Honest caveat (ownership talking point): at 14 rows the semantic gain over SQL is
-small; the value is demonstrating the pattern correctly and knowing when it's
-overkill.
+**Decision:** RAG is the wrong tool here. This is **enrichment over
+self-contained rows**, not Q&A over external knowledge — all information needed
+to infer channel/objective/score is already in the input, so there is nothing to
+retrieve. RAG would add latency + heavy deps for zero quality gain. It's kept
+behind a flag purely to show it was evaluated.
 
-- Embedding text = `f"{name}. {description}. channel={normalized_channel} objective={inferred_objective}"`.
-- Distance = cosine (`vector_cosine_ops`); index = ivfflat/HNSW (small N → seq scan is fine, index added for correctness).
-- Embeddings computed **at ingest time**, after enrichment, stored on the campaign row.
+- Default insights: SQL aggregates (spend/revenue/ROAS by channel & objective) →
+  one strict structured LLM call → 2–3 observations; deterministic fallback.
+- Default search: SQL `ILIKE` over name/description/channel.
+- Flag path (`RAG_ENABLED=true`): pgvector cosine + retrieved context, embeddings
+  from local MiniLM (384-dim) computed at ingest.
 
 ## 5. Data model
 

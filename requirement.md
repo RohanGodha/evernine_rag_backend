@@ -43,21 +43,24 @@ misbehaving model never sinks the batch.
 
 | Requirement | Where | Fallback |
 |-------------|-------|----------|
-| **Portfolio insights** — `GET /campaigns/insights` aggregates from DB + asks LLM for 2–3 observations | `rag.py`, `main.py` | RAG context (pgvector top-k) + SQL aggregates → LLM; if embeddings unavailable → SQL aggregates only; if LLM down → deterministic aggregate summary |
-| **Semantic search** — `GET /campaigns/search?q=` over campaigns (vector RAG) | `rag.py`, `embeddings.py`, `main.py` | Embed query → pgvector cosine; if embeddings/pgvector unavailable → SQL `ILIKE` keyword match |
-| **Lightweight eval / self-check** — verify one enriched field against a deterministic rule; flag disagreements | `enrichment.py` | Cross-check LLM `normalized_channel` vs deterministic `fallback_channel`; disagreement → flag `channel_selfcheck_mismatch` |
+| **Portfolio insights** — `GET /campaigns/insights` aggregates from DB + asks LLM for 2–3 observations | `rag.py`, `main.py` | SQL aggregates → one structured LLM call; if LLM down → deterministic aggregate summary. No retrieval by default. |
+| **Keyword search** — `GET /campaigns/search?q=` over name/description/channel | `rag.py`, `main.py` | SQL `ILIKE`. (Vector cosine only if `RAG_ENABLED=true`.) |
+| **Lightweight eval / self-check** — verify one enriched field against a deterministic rule; flag disagreements | `enrichment.py` | When LLM classifies the channel, cross-check vs deterministic `fallback_channel`; disagreement → flag `channel_selfcheck_mismatch` |
 | **Idempotent re-ingest** — running twice creates no duplicates | `enrichment.py`, `db.py` | PK = business `id` upsert + in-batch dedupe |
 | **Tests** — around parsing / validation logic | `tests/` | pytest: cleaning, fallback, RAG degradation |
 
 ---
 
-## RAG constraint note
+## RAG decision (deliberately OFF)
 
-Groq offers **no text-embedding model** (chat/reasoning + speech only). Therefore
-vector RAG uses **local `sentence-transformers` (`all-MiniLM-L6-v2`, 384-dim)** for
-embeddings while Groq handles generation. `sentence-transformers`/`pgvector` are
-imported behind a guard: if unavailable at runtime the system degrades to SQL
-keyword search and SQL-aggregate insights, and the app still runs fully.
+RAG is **not used** and is disabled by default (`RAG_ENABLED=false`). This task is
+**enrichment over self-contained rows**, not Q&A over external knowledge — every
+fact needed is already in the campaign input, so there is nothing to retrieve.
+RAG would only add latency and heavy deps (`torch`/`pgvector`) with no quality
+gain. The vector code (`embeddings.py`, `rag.py`, `vector` column) is kept behind
+the flag to show it was explored. Aside: Groq also has no embedding model, so any
+RAG would require local `sentence-transformers` — further reason it's not the
+default. With RAG off, search = SQL `ILIKE` and insights = SQL aggregates + LLM.
 
 ---
 

@@ -34,6 +34,8 @@ Legend: [x] done · [~] in progress · [ ] pending
 ## M4 — LLM enrichment  [x]
 - [x] Groq client (OpenAI-compatible base_url)
 - [x] Strict `json_schema` structured output, `temperature=0`
+- [x] Deterministic-first channel: static lookup → LLM partial (objective+score);
+      miss → LLM full (channel+objective+score)
 - [x] Retry → rule-based `fallback_enrich` (channel/objective/ROAS score)
 - **Fallback:** never raises; degrades to deterministic enrichment
 
@@ -49,24 +51,22 @@ Legend: [x] done · [~] in progress · [ ] pending
 - [x] `GET /campaigns/{id}` (404 if missing)
 - [x] `GET /health`
 
-## M7 — Embeddings (new)  [ ]
-- [ ] `app/embeddings.py`: lazy-load `all-MiniLM-L6-v2` (384-dim)
-- [ ] Import guard + `is_available()` flag
-- [ ] `encode(text) -> list[float] | None`
-- **Fallback:** unavailable → returns None, caller degrades to SQL
+## M7 — Embeddings (behind flag)  [x]
+- [x] `app/embeddings.py`: lazy-load `all-MiniLM-L6-v2` (384-dim), import guard
+- [x] Gated behind `RAG_ENABLED` (off by default — not needed for enrichment)
 
-## M8 — RAG (new)  [ ]
-- [ ] `app/rag.py`: `upsert_embedding()` after enrichment
-- [ ] `search(q, k)` cosine; **fallback:** SQL `ILIKE`
-- [ ] `insights()` retrieve top-k + SQL aggregates → strict LLM; **fallback:** deterministic aggregate summary
+## M8 — RAG (behind flag) / insights  [x]
+- [x] `GET /campaigns/insights`: SQL aggregates → strict LLM; **fallback:** deterministic aggregate summary (NO retrieval by default)
+- [x] `search(q, k)`: SQL `ILIKE` keyword by default; pgvector cosine only if `RAG_ENABLED`
+- [x] Decision recorded: RAG deliberately off (enrichment ≠ Q&A over external knowledge)
 
-## M9 — API stretch (new)  [ ]
-- [ ] `GET /campaigns/search?q=&k=`
-- [ ] `GET /campaigns/insights`
+## M9 — API stretch  [x]
+- [x] `GET /campaigns/search?q=&k=` (keyword)
+- [x] `GET /campaigns/insights`
 
-## M10 — Self-check / eval  [ ]
-- [ ] Compare LLM `normalized_channel` vs deterministic `fallback_channel`
-- [ ] Flag `channel_selfcheck_mismatch`, surface in ingest flags
+## M10 — Self-check / eval  [x]
+- [x] When LLM classifies channel, compare vs deterministic `fallback_channel`
+- [x] Flag `channel_selfcheck_mismatch` / `channel_resolved_static`, surfaced in ingest flags
 - **Fallback:** disagreement is informational, never blocks ingest
 
 ## M11 — Tests  [ ]

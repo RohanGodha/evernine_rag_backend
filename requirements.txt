@@ -9,6 +9,6 @@ python-dotenv==1.0.1
 pytest==8.3.4
 httpx==0.28.1
 
-# --- Vector RAG (optional at runtime; imported behind a guard) ---
-pgvector==0.3.6
-sentence-transformers==3.3.1
+# Vector RAG is OFF by default and NOT needed for this task (enrichment, not
+# Q&A over external knowledge). Its heavy deps live in requirements-rag.txt and
+# are only required if you set RAG_ENABLED=true.

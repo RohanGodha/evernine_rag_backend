@@ -1,6 +1,8 @@
 services:
   db:
-    # pgvector image = Postgres 16 + the `vector` extension preinstalled.
+    # pgvector image = Postgres 16 + the `vector` extension preinstalled. The
+    # extension is only used if RAG_ENABLED=true; otherwise this behaves as a
+    # plain Postgres 16. (Swap to postgres:16-alpine if you never enable RAG.)
     image: pgvector/pgvector:pg16
     container_name: aster_oak_db
     environment:

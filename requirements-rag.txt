@@ -1,0 +1,6 @@
+# Optional vector-RAG dependencies. Only needed when RAG_ENABLED=true.
+# Rationale (see README): this task is enrichment over self-contained rows, not
+# retrieval over external knowledge, so RAG is intentionally disabled by default.
+# Install with:  pip install -r requirements-rag.txt
+pgvector==0.3.6
+sentence-transformers==3.3.1

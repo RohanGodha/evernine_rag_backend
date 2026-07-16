@@ -1,9 +1,14 @@
-"""Vector RAG: semantic search + portfolio insights.
+"""Search + portfolio insights.
 
-Both features degrade gracefully:
-  * search()   -> pgvector cosine; falls back to SQL ILIKE keyword match.
-  * insights() -> retrieve context + SQL aggregates -> LLM; falls back to a
-                  deterministic aggregate summary if the LLM is unavailable.
+RAG is OFF by default (see config.rag_enabled). This task is enrichment over
+self-contained rows, not Q&A over external knowledge, so retrieval isn't needed.
+Default behaviour:
+  * search()   -> SQL ILIKE keyword match. (pgvector cosine only if RAG enabled.)
+  * insights() -> SQL aggregates -> one structured LLM call; deterministic
+                  aggregate summary if the LLM is unavailable. No retrieval.
+
+The vector path (embeddings + pgvector cosine + retrieved context) is retained
+behind the flag purely to show it was evaluated.
 """
 from __future__ import annotations
 
@@ -28,8 +33,8 @@ def compute_embedding(
     name: Optional[str], description: Optional[str],
     normalized_channel: str, inferred_objective: str,
 ) -> Optional[List[float]]:
-    """Compute an embedding for a campaign, or None if unavailable."""
-    if not PGVECTOR_AVAILABLE or not embeddings.is_available():
+    """Compute an embedding for a campaign, or None if unavailable/disabled."""
+    if not settings.rag_enabled or not PGVECTOR_AVAILABLE or not embeddings.is_available():
         return None
     text = embeddings.build_embedding_text(
         name, description, normalized_channel, inferred_objective
@@ -40,8 +45,11 @@ def compute_embedding(
 # --- Semantic search ---
 
 def search(session: Session, query: str, k: int = 5) -> tuple[List[EnrichedCampaign], str]:
-    """Return (campaigns, mode). mode is 'vector' or 'keyword'."""
-    if PGVECTOR_AVAILABLE and embeddings.is_available():
+    """Return (campaigns, mode). mode is 'vector' or 'keyword'.
+
+    Default path is SQL keyword (ILIKE): vector search only runs when RAG is
+    explicitly enabled and pgvector + embeddings are available."""
+    if settings.rag_enabled and PGVECTOR_AVAILABLE and embeddings.is_available():
         qvec = embeddings.encode(query)
         if qvec is not None:
             try:
@@ -137,13 +145,18 @@ def insights(session: Session) -> dict:
     deterministic aggregate summary."""
     agg = _aggregate(session)
 
-    # Optional retrieval context: a few representative campaigns.
-    context, mode = search(session, "budget efficiency and performance", k=5)
-    context_lines = [
-        f"- {c.id} [{c.normalized_channel}/{c.inferred_objective}] "
-        f"spend={c.spend} revenue={c.revenue} health={c.health_score}"
-        for c in context
-    ]
+    # Insights are SQL-aggregate driven. Retrieval context is only added when
+    # RAG is explicitly enabled (off by default: the aggregates already contain
+    # everything needed for portfolio observations).
+    mode = "none"
+    context_lines: List[str] = []
+    if settings.rag_enabled:
+        context, mode = search(session, "budget efficiency and performance", k=5)
+        context_lines = [
+            f"- {c.id} [{c.normalized_channel}/{c.inferred_objective}] "
+            f"spend={c.spend} revenue={c.revenue} health={c.health_score}"
+            for c in context
+        ]
 
     if not settings.groq_api_key:
         return {
@@ -153,10 +166,9 @@ def insights(session: Session) -> dict:
             "observations": _deterministic_observations(agg),
         }
 
-    prompt = (
-        f"Aggregates (JSON):\n{json.dumps(agg, indent=2)}\n\n"
-        f"Example campaigns (retrieved, mode={mode}):\n" + "\n".join(context_lines)
-    )
+    prompt = f"Aggregates (JSON):\n{json.dumps(agg, indent=2)}"
+    if context_lines:
+        prompt += f"\n\nExample campaigns (retrieved, mode={mode}):\n" + "\n".join(context_lines)
     try:
         resp = llm_client.client.chat.completions.create(
             model=settings.groq_model,

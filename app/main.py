@@ -60,25 +60,26 @@ def list_campaigns(
     return list(session.scalars(stmt).all())
 
 
-# --- Stretch: vector RAG endpoints. Declared before /{campaign_id} so the
-# literal paths take precedence over the path parameter. ---
+# --- Stretch endpoints. Declared before /{campaign_id} so the literal paths
+# take precedence over the path parameter. ---
 
 @app.get("/campaigns/search", response_model=List[CampaignOut])
 def search_campaigns(
-    q: str = Query(..., min_length=1, description="Semantic search query"),
+    q: str = Query(..., min_length=1, description="Keyword search query"),
     k: int = Query(5, ge=1, le=50),
     session: Session = Depends(get_session),
 ) -> List[CampaignOut]:
-    """Semantic search over campaigns. Uses pgvector cosine similarity when
-    available; transparently falls back to SQL keyword matching."""
+    """Keyword search over name/description/channel (SQL ILIKE). If RAG is
+    explicitly enabled, uses pgvector cosine similarity instead."""
     results, _mode = rag.search(session, q, k)
     return results
 
 
 @app.get("/campaigns/insights")
 def campaign_insights(session: Session = Depends(get_session)) -> dict:
-    """Portfolio-level observations: aggregates from the DB + retrieved context
-    fed to the LLM. Falls back to deterministic aggregate observations."""
+    """Portfolio-level observations: SQL aggregates from the DB fed to the LLM
+    via one structured call. Falls back to deterministic aggregate observations.
+    (No retrieval by default — the task is enrichment, not Q&A over knowledge.)"""
     return rag.insights(session)
 
 

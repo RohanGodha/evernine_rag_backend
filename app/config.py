@@ -14,6 +14,12 @@ class Settings(BaseSettings):
         "postgresql+psycopg2://postgres:postgres@localhost:5432/aster_oak"
     )
 
+    # Vector RAG is intentionally OFF by default. This task is enrichment over
+    # self-contained rows, not Q&A over external knowledge, so retrieval adds
+    # latency + heavy deps (torch/pgvector) with no quality gain. The code is
+    # kept behind this flag to show it was explored, not because it's needed.
+    rag_enabled: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
