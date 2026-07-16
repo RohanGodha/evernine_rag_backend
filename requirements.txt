@@ -8,3 +8,7 @@ groq==0.13.1
 python-dotenv==1.0.1
 pytest==8.3.4
 httpx==0.28.1
+
+# --- Vector RAG (optional at runtime; imported behind a guard) ---
+pgvector==0.3.6
+sentence-transformers==3.3.1

@@ -18,8 +18,9 @@ from .schemas import (
     IngestPayload, IngestSummary, RowResult, RawCampaign,
 )
 from .cleaning import clean_row
-from .llm import llm_client
+from .llm import llm_client, fallback_channel
 from .db import EnrichedCampaign, IngestRun, IngestRowResult
+from . import rag
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,24 @@ def _process_row(
         # Enrich (never raises: degrades to fallback).
         result, source = llm_client.enrich(outcome, currency)
 
+        # Self-check / eval: cross-check the LLM's channel against the
+        # deterministic rule. Disagreement is informational (flag, don't block).
+        flags = list(outcome.flags)
+        det_channel = fallback_channel(outcome.raw_channel, outcome.name)
+        if source == "llm" and result.normalized_channel != det_channel:
+            flags.append(
+                f"channel_selfcheck_mismatch(llm={result.normalized_channel.value},"
+                f"rule={det_channel.value})"
+            )
+
+        # Embed for semantic search (best-effort; null vector => SQL fallback).
+        embedding = rag.compute_embedding(
+            outcome.name, outcome.description,
+            result.normalized_channel.value, result.inferred_objective.value,
+        )
+        if embedding is None:
+            flags.append("embedding_unavailable")
+
         # Idempotent upsert by business id.
         existing = session.get(EnrichedCampaign, cid)
         payload = dict(
@@ -115,17 +134,24 @@ def _process_row(
             health_score=result.health_score,
             health_rationale=result.health_rationale,
             enrichment_source=source,
-            data_flags=outcome.flags,
+            data_flags=flags,
         )
+        # embedding is a separate optional column (only present when pgvector
+        # is available); set it via attribute so ORM stays valid either way.
         if existing:
             for k, v in payload.items():
                 setattr(existing, k, v)
+            if embedding is not None and hasattr(existing, "embedding"):
+                existing.embedding = embedding
         else:
-            session.add(EnrichedCampaign(id=cid, **payload))
+            obj = EnrichedCampaign(id=cid, **payload)
+            if embedding is not None and hasattr(obj, "embedding"):
+                obj.embedding = embedding
+            session.add(obj)
 
         row = RowResult(
             id=cid, status="ingested",
-            enrichment_source=source, flags=outcome.flags,
+            enrichment_source=source, flags=flags,
         )
         _record(session, run_id, row)
         return row

@@ -9,11 +9,12 @@ Indexes on normalized_channel and health_score back the required GET filters.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
-    create_engine, String, Integer, Float, Text, DateTime, ForeignKey, Index,
+    create_engine, String, Integer, Float, Text, DateTime, ForeignKey, Index, text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker,
@@ -21,6 +22,21 @@ from sqlalchemy.orm import (
 from sqlalchemy.dialects.postgresql import JSONB
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
+
+# Embedding dimensionality of all-MiniLM-L6-v2. Kept here so ORM + embeddings
+# module agree on a single source of truth.
+EMBEDDING_DIM = 384
+
+# pgvector's SQLAlchemy type is optional at runtime; guard the import so the app
+# still boots (in SQL-only fallback mode) if the package isn't installed.
+try:
+    from pgvector.sqlalchemy import Vector
+    PGVECTOR_AVAILABLE = True
+except Exception:  # pragma: no cover - import environment dependent
+    Vector = None  # type: ignore
+    PGVECTOR_AVAILABLE = False
 
 
 engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
@@ -59,6 +75,11 @@ class EnrichedCampaign(Base):
 
     enrichment_source: Mapped[str] = mapped_column(String(16), nullable=False)  # llm|fallback
     data_flags: Mapped[list] = mapped_column(JSONB, default=list)
+
+    # Semantic-search vector. Nullable: null => embeddings were unavailable for
+    # this row, and search transparently degrades to SQL keyword matching.
+    if PGVECTOR_AVAILABLE:
+        embedding: Mapped[Optional[list]] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -103,8 +124,32 @@ class IngestRowResult(Base):
 
 def init_db() -> None:
     """Create tables if they don't exist (fine for this exercise; a real
-    service would use Alembic migrations)."""
+    service would use Alembic migrations).
+
+    Enables the pgvector extension first (best-effort) so the embedding column
+    and its index can be created. If the extension isn't available the app
+    still runs in SQL-only fallback mode.
+    """
+    if PGVECTOR_AVAILABLE:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception as e:  # pragma: no cover
+            logger.warning("Could not enable pgvector extension: %s", e)
+
     Base.metadata.create_all(bind=engine)
+
+    # Cosine-distance index for semantic search. Best-effort; seq scan is fine
+    # at this data volume if the index can't be created.
+    if PGVECTOR_AVAILABLE:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_campaign_embedding "
+                    "ON enriched_campaigns USING hnsw (embedding vector_cosine_ops)"
+                ))
+        except Exception as e:  # pragma: no cover
+            logger.warning("Could not create vector index: %s", e)
 
 
 def get_session():

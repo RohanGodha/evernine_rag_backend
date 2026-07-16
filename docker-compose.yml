@@ -1,6 +1,7 @@
 services:
   db:
-    image: postgres:16-alpine
+    # pgvector image = Postgres 16 + the `vector` extension preinstalled.
+    image: pgvector/pgvector:pg16
     container_name: aster_oak_db
     environment:
       POSTGRES_USER: postgres
